@@ -49,6 +49,10 @@ body {
     cursor: pointer;
 }
 
+.refresh-btn:disabled {
+    opacity: .6;
+}
+
 .tabs {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -100,6 +104,7 @@ body {
     margin-bottom: 10px;
     color: #777;
     font-size: 12px;
+    gap: 8px;
 }
 
 .list-header {
@@ -163,6 +168,7 @@ body {
     text-align: center;
     color: #888;
     font-size: 11px;
+    word-break: break-word;
 }
 
 .loading {
@@ -203,7 +209,8 @@ body {
 
     <div class="header">
         <h1>나주창고재고</h1>
-        <button class="refresh-btn" onclick="loadCurrentSheet()">
+        <button class="refresh-btn" id="refreshBtn"
+                onclick="loadCurrentSheet()">
             ↻ 새로고침
         </button>
     </div>
@@ -240,6 +247,7 @@ body {
 </div>
 
 <script>
+"use strict";
 
 const SPREADSHEET_ID =
     "168qV0AZ9hCTgU15EStP3UDo4fBTxuPeU";
@@ -252,16 +260,22 @@ const SUPPLIERS = [
     "파이롯트",
     "항소",
     "톰보",
-    "화이트프린텍"
+    "화이트 프린텍"
 ];
 
 let currentSupplier = "3M";
 
 let stockData = {};
 
-let isLoading = false;
+let loadingState = {};
 
-let lastUpdateTime = null;
+let lastUpdate = {};
+
+let requestTimers = {};
+
+let requestScripts = {};
+
+let requestSequence = 0;
 
 
 // 초기 실행
@@ -269,14 +283,19 @@ function init() {
 
     SUPPLIERS.forEach(name => {
         stockData[name] = [];
+        loadingState[name] = false;
+        lastUpdate[name] = null;
     });
 
     createTabs();
 
     loadCurrentSheet();
 
+    // 60초 자동 갱신
     setInterval(() => {
-        loadCurrentSheet(true);
+        SUPPLIERS.forEach(name => {
+            loadSheet(name, true);
+        });
     }, 60000);
 
 }
@@ -314,59 +333,81 @@ function selectSupplier(name) {
 
     document.getElementById("searchInput").value = "";
 
-    createTabs();
-
     document.getElementById("selectedSupplier").textContent =
         name + " 재고";
 
-    if (stockData[name].length > 0) {
-        renderStock();
-        loadCurrentSheet(true);
+    createTabs();
+
+    renderStock();
+
+    if (
+        stockData[name].length === 0 ||
+        !lastUpdate[name]
+    ) {
+        loadSheet(name);
     } else {
-        loadCurrentSheet();
+        updateLastUpdated();
+        loadSheet(name, true);
     }
 
 }
 
 
-// 현재 선택된 시트 불러오기
-function loadCurrentSheet(silent = false) {
+// 현재 선택된 시트 새로고침
+function loadCurrentSheet() {
 
-    if (isLoading) return;
+    loadSheet(currentSupplier);
 
-    isLoading = true;
+}
 
-    const supplier = currentSupplier;
+
+// 시트별 데이터 요청
+function loadSheet(supplier, silent = false) {
+
+    // 같은 시트의 중복 요청 방지
+    if (loadingState[supplier]) return;
+
+    loadingState[supplier] = true;
+
+    const requestId = ++requestSequence;
 
     const stockList = document.getElementById("stockList");
 
-    if (!silent) {
-        stockList.innerHTML =
-            '<div class="loading">재고 데이터를 불러오는 중입니다.</div>';
+    if (supplier === currentSupplier) {
+
+        if (!silent) {
+            stockList.innerHTML =
+                '<div class="loading">재고 데이터를 불러오는 중입니다.</div>';
+        }
+
+        document.getElementById("statusMessage").textContent =
+            supplier + " 데이터 연결 중...";
+
+        document.getElementById("refreshBtn").disabled = true;
     }
 
-    document.getElementById("statusMessage").textContent =
-        "데이터 연결 중...";
-
-    const callbackName =
-        "stockCallback_" + Date.now() + "_" +
-        Math.floor(Math.random() * 100000);
-
+    // Google Visualization JSONP 주소
     const url =
         "https://docs.google.com/spreadsheets/d/" +
         SPREADSHEET_ID +
         "/gviz/tq?sheet=" +
         encodeURIComponent(supplier) +
-        "&tqx=out:json;responseHandler=" +
-        callbackName;
+        "&tqx=" +
+        encodeURIComponent("out:json") +
+        "&_=" + Date.now();
+
+    const callbackName =
+        "googleVisualizationCallback_" +
+        requestId + "_" +
+        Math.floor(Math.random() * 100000);
 
     const script = document.createElement("script");
 
+    script.async = true;
+
     let finished = false;
 
-    const timeout = setTimeout(() => {
-        finishError("응답 시간이 초과되었습니다.");
-    }, 20000);
+    let timeout;
 
     function cleanup() {
 
@@ -380,21 +421,42 @@ function loadCurrentSheet(silent = false) {
 
         delete window[callbackName];
 
-        isLoading = false;
+        loadingState[supplier] = false;
+
+        if (supplier === currentSupplier) {
+            document.getElementById("refreshBtn").disabled = false;
+        }
 
     }
 
     function finishError(message) {
 
+        if (finished) return;
+
         cleanup();
 
+        console.error(
+            supplier + " 시트 오류:",
+            message
+        );
+
+        if (supplier !== currentSupplier) return;
+
         document.getElementById("statusMessage").textContent =
-            message + " 시트 공개 권한을 확인해주세요.";
+            supplier + ": " + message;
 
         if (stockData[supplier].length === 0) {
+
             stockList.innerHTML =
-                '<div class="empty">데이터를 불러오지 못했습니다.<br>' +
-                '스프레드시트 공유 설정을 확인해주세요.</div>';
+                '<div class="empty">' +
+                '데이터를 불러오지 못했습니다.<br>' +
+                '오류: ' + escapeHTML(message) +
+                '</div>';
+
+        } else {
+
+            renderStock();
+
         }
 
     }
@@ -405,8 +467,22 @@ function loadCurrentSheet(silent = false) {
 
         try {
 
-            if (!response || !response.table) {
-                throw new Error("시트 응답이 올바르지 않습니다.");
+            if (!response) {
+                throw new Error("응답 데이터가 없습니다.");
+            }
+
+            if (response.status === "error") {
+                throw new Error(
+                    response.errors?.[0]?.detailed_message ||
+                    response.errors?.[0]?.message ||
+                    "구글 시트 응답 오류"
+                );
+            }
+
+            if (!response.table) {
+                throw new Error(
+                    "Google Visualization 테이블을 찾을 수 없습니다."
+                );
             }
 
             const rows = response.table.rows || [];
@@ -417,55 +493,81 @@ function loadCurrentSheet(silent = false) {
 
                 const cells = row.c || [];
 
-                const supplierValue = getCellValue(cells[0]);
-                const productName = getCellValue(cells[1]);
-                const quantityValue = getCellValue(cells[2]);
+                const supplierValue =
+                    getCellValue(cells[0]);
+
+                const productName =
+                    getCellValue(cells[1]);
+
+                const quantityValue =
+                    getCellValue(cells[2]);
 
                 if (
-                    productName === "" ||
                     productName === null ||
-                    productName === undefined
+                    productName === undefined ||
+                    String(productName).trim() === ""
                 ) {
                     return;
                 }
 
                 result.push({
+
                     supplier: supplierValue || supplier,
+
                     name: String(productName).trim(),
+
                     quantity: quantityValue
+
                 });
 
             });
 
             stockData[supplier] = result;
 
-            lastUpdateTime = new Date();
+            lastUpdate[supplier] = new Date();
 
             cleanup();
 
-            renderStock();
+            if (supplier === currentSupplier) {
 
-            document.getElementById("lastUpdated").textContent =
-                "갱신 " + formatTime(lastUpdateTime);
+                renderStock();
 
-            document.getElementById("statusMessage").textContent =
-                "정상적으로 연결되었습니다. (60초마다 자동 갱신)";
+                updateLastUpdated();
+
+                document.getElementById("statusMessage").textContent =
+                    "정상적으로 연결되었습니다. (60초마다 자동 갱신)";
+
+            }
 
         } catch (error) {
 
-            finishError("데이터 처리 오류");
-
-            console.error(error);
+            finishError(
+                error.message || "데이터 처리 오류"
+            );
 
         }
 
     };
 
-    script.onerror = () => {
-        finishError("구글 시트 연결에 실패했습니다.");
+    script.onerror = function() {
+
+        finishError(
+            "구글 시트 연결에 실패했습니다."
+        );
+
     };
 
+    timeout = setTimeout(() => {
+
+        finishError(
+            "응답 시간이 초과되었습니다."
+        );
+
+    }, 20000);
+
     script.src = url;
+
+    requestScripts[supplier] = script;
 
     document.head.appendChild(script);
 
@@ -473,15 +575,26 @@ function loadCurrentSheet(silent = false) {
 
 
 // 셀 값 추출
+// 원본값 v를 우선 사용하고 없으면 표시값 f 사용
 function getCellValue(cell) {
 
     if (!cell) return "";
 
-    if (cell.f !== null && cell.f !== undefined) {
+    if (
+        cell.v !== null &&
+        cell.v !== undefined
+    ) {
+        return cell.v;
+    }
+
+    if (
+        cell.f !== null &&
+        cell.f !== undefined
+    ) {
         return cell.f;
     }
 
-    return cell.v ?? "";
+    return "";
 
 }
 
@@ -551,7 +664,11 @@ function renderStock() {
 // 수량 표시
 function formatQuantity(value) {
 
-    if (value === null || value === undefined || value === "") {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
         return "-";
     }
 
@@ -568,6 +685,19 @@ function formatQuantity(value) {
 }
 
 
+// 마지막 갱신 시간 표시
+function updateLastUpdated() {
+
+    const date = lastUpdate[currentSupplier];
+
+    document.getElementById("lastUpdated").textContent =
+        date
+            ? "갱신 " + formatTime(date)
+            : "데이터 확인 중";
+
+}
+
+
 // 시간 표시
 function formatTime(date) {
 
@@ -575,6 +705,24 @@ function formatTime(date) {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit"
+    });
+
+}
+
+
+// 오류 메시지 HTML 보호
+function escapeHTML(value) {
+
+    return String(value).replace(/[&<>"']/g, char => {
+
+        return {
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;"
+        }[char];
+
     });
 
 }
