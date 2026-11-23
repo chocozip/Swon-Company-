@@ -1583,6 +1583,8 @@ function loadPaymentData() {
    if (!response.table) throw new Error("시트 데이터를 읽을 수 없습니다.");
 
    const rows = response.table.rows || [];
+console.log("입금내역 첫 번째 행:", rows[0]);
+console.log("입금내역 전체 행 수:", rows.length);
 
    /*
     * 시트 구조
