@@ -1614,7 +1614,7 @@ console.log("전체 행 수:", rows.length);
     * 앞의 4개 행을 제외하고 가져옵니다.
     */
 
-   paymentData = rows.slice(4).map(row => {
+   paymentData = rows.map(row => {
     const cells = row.c || [];
 
     return {
@@ -1644,11 +1644,12 @@ console.log("전체 행 수:", rows.length);
   }
  };
 
- const url = "https://docs.google.com/spreadsheets/d/" +
-  PAYMENT_SPREADSHEET_ID +
-  "/gviz/tq?gid=" + PAYMENT_GID +
-  "&headers=0&tqx=" +
-  encodeURIComponent("out:json;responseHandler:" + callbackName);
+const url = "https://docs.google.com/spreadsheets/d/" +
+    PAYMENT_SPREADSHEET_ID +
+    "/gviz/tq?gid=" + PAYMENT_GID +
+    "&range=A5:G" +
+    "&headers=0&tqx=" +
+    encodeURIComponent("out:json;responseHandler:" + callbackName);
 
  script.onerror = () => finishError("구글 스프레드시트 연결에 실패했습니다. 시트 공유 설정을 확인해주세요.");
  script.src = url;
